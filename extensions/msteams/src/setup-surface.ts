@@ -1,18 +1,19 @@
-import type { MSTeamsTeamConfig } from "openclaw/plugin-sdk/msteams";
 import {
+  createTopLevelChannelAllowFromSetter,
+  createTopLevelChannelDmPolicy,
+  createTopLevelChannelGroupPolicySetter,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
-  setTopLevelChannelAllowFrom,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-  type DmPolicy,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
@@ -23,22 +24,13 @@ import { msteamsSetupAdapter } from "./setup-core.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
-
-function setMSTeamsDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  return setTopLevelChannelDmPolicyWithAllowFrom({
-    cfg,
-    channel,
-    dmPolicy,
-  });
-}
-
-function setMSTeamsAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-  return setTopLevelChannelAllowFrom({
-    cfg,
-    channel,
-    allowFrom,
-  });
-}
+const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
+  channel,
+});
+const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
+  channel,
+  enabled: true,
+});
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
@@ -146,18 +138,6 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
   );
 }
 
-function setMSTeamsGroupPolicy(
-  cfg: OpenClawConfig,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return setTopLevelChannelGroupPolicy({
-    cfg,
-    channel,
-    groupPolicy,
-    enabled: true,
-  });
-}
-
 function setMSTeamsTeamsAllowlist(
   cfg: OpenClawConfig,
   entries: Array<{ teamKey: string; channelKey?: string }>,
@@ -261,7 +241,7 @@ async function resolveMSTeamsGroupAllowlist(params: {
     return resolvedEntries;
   } catch (err) {
     await params.prompter.note(
-      `Channel lookup failed; keeping entries as typed. ${String(err)}`,
+      `Channel lookup failed; keeping entries as typed. ${formatUnknownError(err)}`,
       "MS Teams channels",
     );
     return resolvedEntries;
@@ -281,15 +261,14 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
     setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
 };
 
-const msteamsDmPolicy: ChannelSetupDmPolicy = {
+const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   label: "MS Teams",
   channel,
   policyKey: "channels.msteams.dmPolicy",
   allowFromKey: "channels.msteams.allowFrom",
   getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) => setMSTeamsDmPolicy(cfg, policy),
   promptAllowFrom: promptMSTeamsAllowFrom,
-};
+});
 
 export { msteamsSetupAdapter } from "./setup-core.js";
 
@@ -297,26 +276,19 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
   channel,
   resolveAccountIdForConfigure: () => DEFAULT_ACCOUNT_ID,
   resolveShouldPromptAccountIds: () => false,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "MS Teams",
     configuredLabel: "configured",
     unconfiguredLabel: "needs app credentials",
     configuredHint: "configured",
     unconfiguredHint: "needs app creds",
     configuredScore: 2,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) => {
-      return (
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams)
-      );
-    },
-    resolveStatusLines: ({ cfg }) => {
-      const configured =
-        Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
-        hasConfiguredMSTeamsCredentials(cfg.channels?.msteams);
-      return [`MS Teams: ${configured ? "configured" : "needs app credentials"}`];
-    },
-  },
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg }) =>
+      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)) ||
+      hasConfiguredMSTeamsCredentials(cfg.channels?.msteams),
+  }),
   credentials: [],
   finalize: async ({ cfg, prompter }) => {
     const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
